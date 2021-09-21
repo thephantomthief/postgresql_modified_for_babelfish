@@ -73,6 +73,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/typcache.h"
 
@@ -2357,6 +2358,16 @@ ExecuteCallStmt(CallStmt *stmt, ParamListInfo params, bool atomic, DestReceiver 
 	estate->es_param_list_info = params;
 	econtext = CreateExprContext(estate);
 
+	/*
+	 * If we're called in non-atomic context, we also have to ensure that the
+	 * argument expressions run with an up-to-date snapshot.  Our caller will
+	 * have provided a current snapshot in atomic contexts, but not in
+	 * non-atomic contexts, because the possibility of a COMMIT/ROLLBACK
+	 * destroying the snapshot makes higher-level management too complicated.
+	 */
+	if (!atomic)
+		PushActiveSnapshot(GetTransactionSnapshot());
+
 	i = 0;
 	foreach(lc, fexpr->args)
 	{
@@ -2374,7 +2385,13 @@ ExecuteCallStmt(CallStmt *stmt, ParamListInfo params, bool atomic, DestReceiver 
 		i++;
 	}
 
-	/*
+	/* Get rid of temporary snapshot for arguments, if we made one */
+	if (!atomic)
+		PopActiveSnapshot();
+ 
+	/* Here we actually call the procedure */
+ 
+	/* BABELFISH
 	 * If we are here for INSERT ... EXECUTE, prepare a resultinfo node for
 	 * communication before invoking the function, which can accumulate the
 	 * result sets.
@@ -2391,11 +2408,11 @@ ExecuteCallStmt(CallStmt *stmt, ParamListInfo params, bool atomic, DestReceiver 
 		int natts = 0;
 		ListCell *lc;
 		ListCell *next;
-
+ 
 		/* look up the INSERT target relation rowtype's tupdesc */
 		reltypeid = get_rel_type_id(stmt->relation);
 		reldesc = lookup_rowtype_tupdesc(reltypeid, -1);
-
+ 
 		/* build a tupdesc that only contains relevant INSERT columns */
 		retdesc = CreateTemplateTupleDesc(list_length(stmt->attrnos));
 		for (lc = list_head(stmt->attrnos); lc != NULL; lc = next)
@@ -2404,7 +2421,7 @@ ExecuteCallStmt(CallStmt *stmt, ParamListInfo params, bool atomic, DestReceiver 
 			TupleDescCopyEntry(retdesc, natts, reldesc, lfirst_int(lc));
 			next = lnext(stmt->attrnos, lc);
 		}
-
+ 
 		fcinfo->resultinfo = (Node *) &rsinfo;
 		rsinfo.type = T_ReturnSetInfo;
 		rsinfo.econtext = econtext;
@@ -2432,11 +2449,12 @@ ExecuteCallStmt(CallStmt *stmt, ParamListInfo params, bool atomic, DestReceiver 
 		rsinfo.setResult = NULL;
 		rsinfo.setDesc = NULL;
 	}
-
+ 
 	pgstat_init_function_usage(fcinfo, &fcusage);
 	retval = FunctionCallInvoke(fcinfo);
 	pgstat_end_function_usage(&fcusage, true);
-
+ 
+	/* Handle the procedure's outputs */
 	if (((stmt->relation && stmt->attrnos) || (stmt->retdesc && stmt->dest)) &&
 		rsinfo.setDesc && rsinfo.setResult)
 	{
@@ -2460,15 +2478,12 @@ ExecuteCallStmt(CallStmt *stmt, ParamListInfo params, bool atomic, DestReceiver 
 		ExecDropSingleTupleTableSlot(slot);
 	}
 	else if (fexpr->funcresulttype == VOIDOID)
-	{
+    {
 		/* do nothing */
 	}
 	else if (fexpr->funcresulttype == RECORDOID)
 	{
-		/*
-		 * send tuple to client
-		 */
-
+		/* send tuple to client */
 		HeapTupleHeader td;
 		Oid			tupType;
 		int32		tupTypmod;
