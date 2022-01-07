@@ -3,10 +3,10 @@ name: CI
 on:
   push:
     branches:
-      - BABEL_1_X_DEV__13_4
+      - TEST_BABEL_1_X_DEV__13_5
   pull_request:
     branches:
-      - BABEL_1_X_DEV__13_4
+      - TEST_BABEL_1_X_DEV__13_5
 
 jobs:
   build-and-run-tests:

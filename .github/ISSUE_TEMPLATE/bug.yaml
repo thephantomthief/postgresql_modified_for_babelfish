@@ -32,7 +32,8 @@ body:
       label: Version
       description: What version of our software are you running?
       options:
-        - BABEL_1_X_DEV__13_4 (Default)
+        - TEST_BABEL_1_X_DEV__13_5 (Default)
+        - BABEL_1_X_DEV__13_4
     validations:
       required: true
   - type: dropdown
